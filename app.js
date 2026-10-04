@@ -10,7 +10,7 @@ window.addEventListener('unhandledrejection', e => log('Помилка: ' + (e.r
 $('srv').value = localStorage.srv || ''; $('room').value = localStorage.room || '';
 let ws = null, room = '', myId = null, isHost = false, filePath = null, retry = null, srvUrl = '';
 let ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const pcs = new Map(); let viewerSrv = null;
+const pcs = new Map(); let viewerSrv = null, curV = null, lastBytes = 0, lastT = Date.now();
 const tx = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
 
 /* ---------- mpv ---------- */
@@ -46,7 +46,7 @@ function launchMpv(src) {
   let proc;
   try {
     proc = spawn(exe, ['--input-ipc-server=' + pipe, '--pause', '--force-window=yes', '--keep-open=yes', '--hwdec=auto-safe',
-      '--cache=yes', '--demuxer-max-bytes=300MiB', '--demuxer-readahead-secs=120', '--title=Спільний перегляд', src], { stdio: ['ignore', 'pipe', 'pipe'] });
+      '--cache=yes', '--demuxer-max-bytes=300MiB', '--demuxer-readahead-secs=180', '--title=Спільний перегляд', src], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) { return log('Помилка запуску mpv: ' + err.message); }
   mpv = { proc, sock: null }; paused = true;
   const out = d => String(d).split('\n').forEach(l => { if (/error|fail|cannot|unable|invalid/i.test(l)) log('mpv: ' + l.trim().slice(0, 200)); });
@@ -95,6 +95,23 @@ function applySync(m) {
 }
 
 /* ---------- мережа ---------- */
+async function statTick() {
+  if (isHost || !curV) return;
+  const now = Date.now(), b = curV.bytes();
+  const mbps = ((b - lastBytes) * 8 / 1e6) / Math.max(0.5, (now - lastT) / 1000); lastBytes = b; lastT = now;
+  let conn = '?';
+  try {
+    const pc = pcs.get('c'), st = await pc.getStats(); let sel;
+    st.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) sel = st.get(r.selectedCandidatePairId); });
+    if (!sel) st.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') sel = r; });
+    if (sel) { const l = st.get(sel.localCandidateId), rm = st.get(sel.remoteCandidateId);
+      conn = ((l && l.candidateType === 'relay') || (rm && rm.candidateType === 'relay')) ? 'через TURN (повільніше)' : 'напряму (P2P)'; }
+  } catch {}
+  const show = c => { $('stat').textContent = 'Швидкість: ' + mbps.toFixed(1) + ' Мбіт/с · Кеш: ' + c + ' с · З\'єднання: ' + conn; };
+  if (!mpv || !mpv.sock) return show('?');
+  ipc(['get_property', 'demuxer-cache-duration'], r => show(typeof r.data === 'number' ? r.data.toFixed(0) : '?'));
+}
+setInterval(statTick, 2000);
 function closePeers() { pcs.forEach(p => p.close()); pcs.clear(); }
 function stopAll() { closePeers(); killMpv(); if (viewerSrv) { viewerSrv.close(); viewerSrv = null; } }
 
@@ -160,7 +177,7 @@ async function onSignal(from, d) {
         pc = new RTCPeerConnection(ICE); pcs.set('c', pc);
         pc.onicecandidate = e => e.candidate && tx({ type: 'signal', to: from, data: { ice: e.candidate } });
         pc.ondatachannel = e => {
-          const dc = e.channel, v = core.viewerChannel(dc);
+          const dc = e.channel, v = core.viewerChannel(dc); curV = v; lastBytes = 0; lastT = Date.now();
           const go = async () => {
             try {
               const meta = await v.getMeta();
