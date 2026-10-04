@@ -4,14 +4,39 @@
   "description": "Спільний перегляд",
   "author": "friends",
   "main": "main.js",
-  "scripts": { "start": "electron .", "dist": "electron-builder --win portable --publish never" },
-  "devDependencies": { "electron": "^33.0.0", "electron-builder": "^25.1.8" },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
   "build": {
     "appId": "com.friends.watchparty",
     "productName": "WatchParty",
-    "files": ["main.js", "index.html", "app.js", "core.js"],
-    "extraResources": [{ "from": "mpv", "to": "mpv" }],
-    "win": { "target": "portable" },
-    "directories": { "output": "dist" }
+    "files": [
+      "main.js",
+      "index.html",
+      "app.js",
+      "core.js",
+      "transcode.js"
+    ],
+    "extraResources": [
+      {
+        "from": "mpv",
+        "to": "mpv"
+      },
+      {
+        "from": "ffmpeg",
+        "to": "ffmpeg"
+      }
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "directories": {
+      "output": "dist"
+    }
   }
 }

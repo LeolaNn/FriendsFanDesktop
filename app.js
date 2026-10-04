@@ -2,12 +2,14 @@ const { ipcRenderer } = require('electron');
 const { spawn } = require('child_process');
 const net = require('net'), fs = require('fs'), path = require('path');
 const core = require('./core');
+const transcode = require('./transcode');
 const $ = id => document.getElementById(id);
 const log = t => { const d = document.createElement('div'); d.textContent = new Date().toLocaleTimeString() + '  ' + t; $('log').prepend(d); };
 
 window.addEventListener('error', e => log('Помилка: ' + e.message));
 window.addEventListener('unhandledrejection', e => log('Помилка: ' + (e.reason && e.reason.message || e.reason)));
 $('srv').value = localStorage.srv || ''; $('room').value = localStorage.room || '';
+let hostFiles = {}, hostCtl = [], curLevel = '100';
 let ws = null, room = '', myId = null, isHost = false, filePath = null, retry = null, srvUrl = '';
 let ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const pcs = new Map(); let viewerSrv = null, curV = null, lastBytes = 0, lastT = Date.now();
@@ -38,15 +40,15 @@ const getTime = cb => ipc(['get_property', 'time-pos'], r => cb(typeof r.data ==
 const broadcast = a => getTime(t => tx({ type: 'sync', a, t }));
 const heartbeat = () => getTime(t => tx({ type: 'sync', a: 'hb', p: paused, t }));
 
-function launchMpv(src) {
-  killMpv();
+function launchMpv(src, opts = {}) {
+  killMpv(); ignoreUntil = Date.now() + 2500;
   const pipe = process.platform === 'win32' ? '\\\\.\\pipe\\watchparty-' + process.pid + '-' + Date.now() : '/tmp/watchparty-' + process.pid + '.sock';
   const exe = mpvExe();
   log('Запускаю mpv: ' + exe);
   let proc;
   try {
     proc = spawn(exe, ['--input-ipc-server=' + pipe, '--pause', '--force-window=yes', '--keep-open=yes', '--hwdec=auto-safe',
-      '--cache=yes', '--demuxer-max-bytes=300MiB', '--demuxer-readahead-secs=180', '--title=Спільний перегляд', src], { stdio: ['ignore', 'pipe', 'pipe'] });
+      '--cache=yes', '--demuxer-max-bytes=300MiB', '--demuxer-readahead-secs=180', '--title=Спільний перегляд', ...(opts.start > 1 ? ['--start=' + opts.start.toFixed(2)] : []), src], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) { return log('Помилка запуску mpv: ' + err.message); }
   mpv = { proc, sock: null }; paused = true;
   const out = d => String(d).split('\n').forEach(l => { if (/error|fail|cannot|unable|invalid/i.test(l)) log('mpv: ' + l.trim().slice(0, 200)); });
@@ -54,18 +56,19 @@ function launchMpv(src) {
   proc.on('spawn', () => log('mpv запущено (pid ' + proc.pid + ')'));
   proc.on('error', e => log('Не вдалося запустити mpv (' + e.code + '). Натисніть «Шлях до mpv…» і вкажіть mpv.exe'));
   proc.on('exit', (code, sig) => { if (mpv && mpv.proc === proc) { mpv = null; clearInterval(hbTimer); log('mpv завершився (код ' + code + (sig ? ', ' + sig : '') + ')'); } });
-  connectPipe(pipe, proc, 0);
+  connectPipe(pipe, proc, 0, opts);
 }
-function connectPipe(pipe, proc, tries) {
+function connectPipe(pipe, proc, tries, opts) {
   const s = net.connect(pipe); let buf = '';
   s.on('connect', () => {
     if (!mpv || mpv.proc !== proc) return s.destroy();
     mpv.sock = s; ipc(['observe_property', 1, 'pause']); ipc(['observe_property', 2, 'volume']);
     volIgnoreUntil = Date.now() + 1000; ipc(['set_property', 'volume', +$('vol').value]);
     if (isHost) hbTimer = setInterval(heartbeat, 4000);
+    if (opts && opts.resume) setTimeout(() => { ignoreUntil = Date.now() + 800; ipc(['set_property', 'pause', false]); }, 700);
   });
   s.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); try { onMpv(JSON.parse(l)); } catch {} } });
-  s.on('error', () => { if (tries < 80 && mpv && mpv.proc === proc) setTimeout(() => connectPipe(pipe, proc, tries + 1), 250); });
+  s.on('error', () => { if (tries < 80 && mpv && mpv.proc === proc) setTimeout(() => connectPipe(pipe, proc, tries + 1, opts), 250); });
 }
 function onMpv(e) {
   if (e.request_id && cbs.has(e.request_id)) { cbs.get(e.request_id)(e); cbs.delete(e.request_id); return; }
@@ -113,7 +116,7 @@ async function statTick() {
 }
 setInterval(statTick, 2000);
 function closePeers() { pcs.forEach(p => p.close()); pcs.clear(); }
-function stopAll() { closePeers(); killMpv(); if (viewerSrv) { viewerSrv.close(); viewerSrv = null; } }
+function stopAll() { hostCtl = []; transcode.cancel(); closePeers(); killMpv(); if (viewerSrv) { viewerSrv.close(); viewerSrv = null; } }
 
 $('join').onclick = async () => {
   srvUrl = $('srv').value.trim().replace(/\/+$/, '');
@@ -151,11 +154,29 @@ function connect() {
 $('host').onclick = async () => {
   if (!ws || ws.readyState !== 1) return log('Спершу увійдіть в кімнату');
   const p = await ipcRenderer.invoke('pick'); if (!p) return;
-  stopAll(); filePath = p; isHost = true; tx({ type: 'cast' });
+  stopAll(); filePath = p; hostFiles = { '100': { path: p, name: path.basename(p) } }; isHost = true; tx({ type: 'cast' });
   log('Ви хост: ' + path.basename(p) + '. Натисніть Пробіл у mpv, коли всі підключаться');
   launchMpv(p);
 };
 $('vol').oninput = () => { $('volv').textContent = $('vol').value; ipc(['set_property', 'volume', +$('vol').value]); };
+$('mk').onclick = async () => {
+  if (!isHost || !filePath) return log('Спершу оберіть серію як хост');
+  const levels = [...document.querySelectorAll('.lv:checked')].map(x => +x.value).sort((a, b) => b - a);
+  if (!levels.length) return;
+  const src = filePath, files = hostFiles;
+  $('mk').disabled = true;
+  for (const pct of levels) {
+    if (hostFiles !== files) break;
+    try {
+      $('mkst').textContent = 'Версія ' + pct + '%: 0%';
+      const out = await transcode.encode(src, pct, p => { $('mkst').textContent = 'Версія ' + pct + '%: ' + p + '%'; });
+      files[pct] = { path: out, name: path.basename(out) };
+      hostCtl.forEach(c => c.push());
+      log('Версія ' + pct + '% готова');
+    } catch (err) { log('Версія ' + pct + '%: помилка — ' + err.message); }
+  }
+  $('mkst').textContent = 'Готово'; $('mk').disabled = false;
+};
 $('mpvp').onclick = async () => {
   const p = await ipcRenderer.invoke('pick', [{ name: 'mpv', extensions: ['exe'] }, { name: 'Усі файли', extensions: ['*'] }]);
   if (p) { localStorage.mpvPath = p; log('Шлях до mpv збережено'); }
@@ -164,11 +185,32 @@ $('mpvp').onclick = async () => {
 function startPeer(id) {
   if (pcs.has(id)) pcs.get(id).close();
   const pc = new RTCPeerConnection(ICE); pcs.set(id, pc);
-  core.hostChannel(pc.createDataChannel('f'), filePath);
+  hostCtl.push(core.hostChannel(pc.createDataChannel('f'), () => hostFiles));
   pc.onicecandidate = e => e.candidate && tx({ type: 'signal', to: id, data: { ice: e.candidate } });
   pc.onnegotiationneeded = async () => { await pc.setLocalDescription(); tx({ type: 'signal', to: id, data: { sdp: pc.localDescription } }); };
   pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') log('Не вдалося з\'єднатися з глядачем (мережа/NAT, потрібен TURN)'); };
 }
+async function startLevel(v, id, startAt, resume) {
+  const meta = await v.getMeta(id);
+  if (viewerSrv) viewerSrv.close();
+  viewerSrv = v.makeServer(meta, id);
+  await new Promise(r => viewerSrv.listen(0, '127.0.0.1', r));
+  curLevel = id;
+  log('Відкриваю в mpv: ' + meta.name + (id === '100' ? ' (оригінал)' : ' (' + id + '% розміру)'));
+  launchMpv('http://127.0.0.1:' + viewerSrv.address().port + '/' + encodeURIComponent(meta.name), { start: startAt, resume });
+}
+function updateQual(list) {
+  const sel = $('qual'), cur = curLevel;
+  sel.innerHTML = '';
+  list.forEach(id => { const o = document.createElement('option'); o.value = id; o.textContent = id === '100' ? '100% — оригінал' : id + '% розміру'; sel.appendChild(o); });
+  sel.value = cur; $('qcard').hidden = list.length < 2;
+}
+$('qual').onchange = () => {
+  const id = $('qual').value;
+  if (!curV || isHost || id === curLevel) return;
+  if (!mpv || !mpv.sock) return startLevel(curV, id, 0, false).catch(err => log('Помилка: ' + err.message));
+  getTime(t => { const was = !paused; startLevel(curV, id, t, was).catch(err => log('Помилка: ' + err.message)); });
+};
 async function onSignal(from, d) {
   let pc = pcs.get(isHost ? from : 'c');
   if (d.sdp) {
@@ -178,16 +220,8 @@ async function onSignal(from, d) {
         pc.onicecandidate = e => e.candidate && tx({ type: 'signal', to: from, data: { ice: e.candidate } });
         pc.ondatachannel = e => {
           const dc = e.channel, v = core.viewerChannel(dc); curV = v; lastBytes = 0; lastT = Date.now();
-          const go = async () => {
-            try {
-              const meta = await v.getMeta();
-              if (viewerSrv) viewerSrv.close();
-              viewerSrv = v.makeServer();
-              await new Promise(r => viewerSrv.listen(0, '127.0.0.1', r));
-              log('Відкриваю в mpv: ' + meta.name);
-              launchMpv('http://127.0.0.1:' + viewerSrv.address().port + '/' + encodeURIComponent(meta.name));
-            } catch (err) { log('Помилка: ' + err.message); }
-          };
+          v.onVariants = updateQual;
+          const go = () => startLevel(v, '100', 0, false).catch(err => log('Помилка: ' + err.message));
           dc.readyState === 'open' ? go() : dc.addEventListener('open', go);
         };
       }

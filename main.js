@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 function create() {
   const w = new BrowserWindow({ width: 760, height: 660, backgroundColor: '#121216',
     webPreferences: { nodeIntegration: true, contextIsolation: false, webSecurity: false } });

@@ -8,7 +8,7 @@ input{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid #33333d;b
 button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid #33333d;background:#26262f;color:#eee;cursor:pointer}
 button.p{background:#6d4aff;border-color:#6d4aff}button.big{padding:12px 20px;font-weight:600}
 .mut{color:#9a9aa5;font-size:.9rem}#log{max-height:200px;overflow:auto;font-size:.85rem;color:#9a9aa5}
-</style></head><body>
+[hidden]{display:none!important}select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid #33333d;background:#121216;color:#eee}</style></head><body>
 <h1>🎬 Спільний перегляд</h1>
 <div class="card">
   <div class="row"><input id="srv" size="38" placeholder="Адреса сервера: https://назва.onrender.com"></div>
@@ -16,11 +16,20 @@ button.p{background:#6d4aff;border-color:#6d4aff}button.big{padding:12px 20px;fo
 </div>
 <div class="card">
   <div class="row"><button id="host" class="big p">📂 Я хост: обрати серію і почати</button></div>
+  <div class="row" style="margin-top:10px"><span class="mut">Легкі версії для глядачів (% від розміру оригіналу):</span>
+    <label class="mut"><input type="checkbox" class="lv" value="90" checked> 90%</label>
+    <label class="mut"><input type="checkbox" class="lv" value="75" checked> 75%</label>
+    <label class="mut"><input type="checkbox" class="lv" value="50" checked> 50%</label>
+    <label class="mut"><input type="checkbox" class="lv" value="10" checked> 10%</label></div>
+  <div class="row"><button id="mk">⚙ Створити легкі версії</button><span class="mut" id="mkst"></span></div>
   <div class="mut">Хост обирає файл на своєму комп'ютері. Решта автоматично бачать його в оригінальній якості (відкриється вікно mpv). Пауза й перемотка синхронні в усіх.</div>
 </div>
 <div class="card">
   <div class="row"><span>🔊 Гучність</span><input type="range" id="vol" min="0" max="130" value="100" style="flex:1;min-width:160px;padding:0"><span id="volv" class="mut">100</span></div>
   <div class="row"><label class="mut"><input type="checkbox" id="volsync" checked> Синхронізувати гучність з усіма в кімнаті</label></div>
+</div>
+<div class="card" id="qcard" hidden>
+  <div class="row"><span>🎞 Якість</span><select id="qual"></select><span class="mut">100% — оригінал 1 в 1. Нижчі версії менші й швидше підвантажуються. Вибір тільки для вас.</span></div>
 </div>
 <div class="card"><div class="row"><button id="mpvp">Шлях до mpv…</button><span class="mut">потрібно лише якщо mpv не знаходиться автоматично</span></div></div>
 <div class="card mut" id="stat">Статус зʼєднання зʼявиться тут</div>
