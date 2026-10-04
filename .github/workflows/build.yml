@@ -1,0 +1,26 @@
+name: build
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Download mpv
+        shell: bash
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh release download -R shinchiro/mpv-winbuild-cmake --pattern 'mpv-x86_64-2*.7z' --dir dl
+          mkdir mpv
+          7z x dl/*.7z -ompv
+          ls mpv
+      - run: npm install
+      - run: npx electron-builder --win portable --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WatchParty-Windows
+          path: dist/*.exe
